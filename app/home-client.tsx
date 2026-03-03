@@ -7,11 +7,45 @@ type BleDeviceInfo = {
   name: string | null;
 };
 
-// Muse 2 / Muse S primary service and one EEG characteristic UUID.
-// These UUIDs are taken from the open-source muse-js project and
-// public reverse engineering of the Muse protocol.
+// Muse service and characteristics – aligned to the structure used in
+// the reference client at:
+// https://github.com/htil/neuroscope/blob/main/src/renderer/js/muse-client.js
 const MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb";
-const EEG_CHARACTERISTIC_UUID = "273e0003-4c4d-454d-96be-f03bac821358";
+const TELEMETRY_CHARACTERISTIC = "273e000b-4c4d-454d-96be-f03bac821358";
+const EEG_CHARACTERISTICS = [
+  "273e0003-4c4d-454d-96be-f03bac821358",
+  "273e0004-4c4d-454d-96be-f03bac821358",
+  "273e0005-4c4d-454d-96be-f03bac821358",
+  "273e0006-4c4d-454d-96be-f03bac821358",
+  "273e0007-4c4d-454d-96be-f03bac821358",
+];
+const CONTROL_CHARACTERISTIC = "273e0001-4c4d-454d-96be-f03bac821358";
+
+const EEG_FREQUENCY = 256;
+const EEG_SAMPLES_PER_READING = 12;
+
+function decodeUnsigned12BitData(samples: Uint8Array): number[] {
+  const samples12Bit: number[] = [];
+  for (let i = 0; i < samples.length; i++) {
+    if (i % 3 === 0) {
+      samples12Bit.push((samples[i] << 4) | (samples[i + 1] >> 4));
+    } else {
+      samples12Bit.push(((samples[i] & 0xf) << 8) | samples[i + 1]);
+      i++;
+    }
+  }
+  return samples12Bit;
+}
+
+function decodeEEGSamples(samples: Uint8Array): number[] {
+  return decodeUnsigned12BitData(samples).map((n) => 0.48828125 * (n - 0x800));
+}
+
+function encodeCommand(cmd: string): Uint8Array {
+  const encoded = new TextEncoder().encode(`X${cmd}\n`);
+  encoded[0] = encoded.length - 1;
+  return encoded;
+}
 
 type EegSample = {
   t: number;
@@ -19,47 +53,10 @@ type EegSample = {
 };
 
 export default function HomeClient() {
-  const [devices, setDevices] = useState<BleDeviceInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
   const [museStatus, setMuseStatus] = useState<string>("Disconnected");
   const [lastEegSample, setLastEegSample] = useState<string | null>(null);
   const [eegSeries, setEegSeries] = useState<EegSample[]>([]);
-
-  const handleScanClick = async () => {
-    setError(null);
-
-    if (typeof navigator === "undefined" || !("bluetooth" in navigator)) {
-      setError("Web Bluetooth is not supported in this browser.");
-      return;
-    }
-
-    try {
-      setIsScanning(true);
-      const device = await (navigator as any).bluetooth.requestDevice({
-        acceptAllDevices: true,
-      });
-
-      if (device) {
-        setDevices((prev) => {
-          const next: BleDeviceInfo = {
-            id: device.id ?? (device as any).deviceId ?? "",
-            name: device.name ?? null,
-          };
-
-          // Avoid duplicates by id
-          const exists = prev.some((d) => d.id === next.id);
-          return exists ? prev : [...prev, next];
-        });
-      }
-    } catch (err: any) {
-      if (err?.name !== "NotFoundError") {
-        setError(err?.message ?? "Failed to scan for BLE devices.");
-      }
-    } finally {
-      setIsScanning(false);
-    }
-  };
 
   const handleConnectMuseClick = async () => {
     setError(null);
@@ -73,7 +70,10 @@ export default function HomeClient() {
       setMuseStatus("Requesting device…");
       const device: BluetoothDevice = await (navigator as any).bluetooth.requestDevice(
         {
-          filters: [{ namePrefix: "Muse" }],
+          filters: [
+            { namePrefix: "Ganglion-" },
+            { namePrefix: "Muse-" },
+          ],
           optionalServices: [MUSE_SERVICE_UUID],
         }
       );
@@ -85,49 +85,85 @@ export default function HomeClient() {
       setMuseStatus("Connecting…");
       const server = await device.gatt!.connect();
 
-      setMuseStatus("Getting EEG service…");
+      setMuseStatus("Getting Muse service…");
       const service = await server.getPrimaryService(MUSE_SERVICE_UUID);
 
-      setMuseStatus("Subscribing to EEG characteristic…");
-      const eegChar = await service.getCharacteristic(EEG_CHARACTERISTIC_UUID);
+      // Control characteristic and start sequence, mirroring the reference client.
+      setMuseStatus("Configuring stream…");
+      const controlChar = await service.getCharacteristic(CONTROL_CHARACTERISTIC);
+      await controlChar.writeValue(encodeCommand("h"));
+      const preset = "p21";
+      await controlChar.writeValue(encodeCommand(preset));
+      await controlChar.writeValue(encodeCommand("s"));
+      await controlChar.writeValue(encodeCommand("d"));
 
-      await eegChar.startNotifications();
+      // Telemetry (battery etc.) – optional; we just log a bit for debugging.
+      try {
+        const telemetryChar = await service.getCharacteristic(
+          TELEMETRY_CHARACTERISTIC
+        );
+        await telemetryChar.startNotifications();
+        telemetryChar.addEventListener("characteristicvaluechanged", (event) => {
+          const value = (event.target as BluetoothRemoteGATTCharacteristic).value;
+          if (!value) return;
+          const dv = new DataView(value.buffer);
+          const sequenceId = dv.getUint16(0);
+          const batteryLevel = dv.getUint16(2) / 512;
+          console.log("Muse telemetry", { sequenceId, batteryLevel });
+        });
+      } catch {
+        // Ignore telemetry errors – not critical for EEG streaming.
+      }
 
-      eegChar.addEventListener(
-        "characteristicvaluechanged",
-        (event: Event) => {
+      // EEG channels – same characteristic set and decoding as in the reference.
+      setMuseStatus("Subscribing to EEG channels…");
+      const channelCount = 4; // follows the example client
+
+      for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+        const characteristicId = EEG_CHARACTERISTICS[channelIndex];
+        const eegChar = await service.getCharacteristic(characteristicId);
+        await eegChar.startNotifications();
+
+        eegChar.addEventListener("characteristicvaluechanged", (event: Event) => {
           const characteristic = event.target as BluetoothRemoteGATTCharacteristic;
           const value = characteristic.value;
           if (!value) return;
 
           const bytes = new Uint8Array(value.buffer);
+          const dv = new DataView(bytes.buffer);
+          const eventIndex = dv.getUint16(0);
+          const sampleBytes = bytes.subarray(2);
+          const samples = decodeEEGSamples(sampleBytes);
 
-          // For now, just log the raw bytes and keep both
-          // a numeric preview and a rolling series for plotting.
-          console.log("Muse EEG packet (raw bytes)", bytes);
-
-          // Treat each byte as a simple sample value 0–255.
-          // This is not a full Muse protocol decode, but is
-          // sufficient to show live streaming behavior.
-          const now = performance.now();
-          const newSamples: EegSample[] = Array.from(bytes).map(
-            (v, index) => ({
-              t: now + index,
-              value: v,
-            })
-          );
-
-          setEegSeries((prev) => {
-            const maxPoints = 256;
-            const combined = [...prev, ...newSamples];
-            return combined.slice(-maxPoints);
+          console.log("Muse EEG reading", {
+            electrode: channelIndex,
+            index: eventIndex,
+            samples,
           });
 
-          // Show first few bytes so the UI proves we're receiving data.
-          const preview = Array.from(bytes.slice(0, 16)).join(", ");
-          setLastEegSample(preview);
-        }
-      );
+          // For plotting, use channel 0 as a preview.
+          if (channelIndex === 0) {
+            const now = performance.now();
+            const newSamples: EegSample[] = samples.map((v, index) => ({
+              t: now + index,
+              value: v,
+            }));
+
+            setEegSeries((prev) => {
+              const maxPoints = EEG_SAMPLES_PER_READING * 16; // ~192 points
+              const combined = [...prev, ...newSamples];
+              return combined.slice(-maxPoints);
+            });
+
+            setLastEegSample(
+              samples
+                .slice(0, EEG_SAMPLES_PER_READING)
+                .map((v) => v.toFixed(2))
+                .join(", ")
+            );
+          }
+        });
+      }
 
       setMuseStatus("Streaming EEG…");
     } catch (err: any) {
@@ -151,23 +187,16 @@ export default function HomeClient() {
         <div className="flex flex-col items-center gap-3">
           <button
             type="button"
-            onClick={handleScanClick}
-            className="rounded bg-blue-600 px-4 py-2 text-white font-semibold hover:bg-blue-700 disabled:opacity-60"
-            disabled={isScanning}
-          >
-            {isScanning ? "Scanning…" : "Scan for BLE devices"}
-          </button>
-
-          <button
-            type="button"
             onClick={handleConnectMuseClick}
             className="rounded bg-purple-600 px-4 py-2 text-white font-semibold hover:bg-purple-700 disabled:opacity-60"
           >
-            Connect to Muse 2 (EEG)
+            {museStatus === "Streaming EEG…"
+              ? "Connected to Muse"
+              : "Connect to Muse 2 (EEG)"}
           </button>
 
-          <p className="text-sm text-gray-700">
-            Muse status: <span className="font-semibold">{museStatus}</span>
+          <p className="text-xs text-gray-600">
+            Status: <span className="font-semibold">{museStatus}</span>
           </p>
         </div>
 
@@ -216,31 +245,6 @@ export default function HomeClient() {
               Last EEG packet bytes (first 16)
             </div>
             <div>{lastEegSample}</div>
-          </div>
-        )}
-
-        {devices.length > 0 && (
-          <div className="mt-4 w-full max-w-md">
-            <h2 className="mb-2 text-lg font-semibold text-center">
-              Discovered devices
-            </h2>
-            <ul className="space-y-1 text-sm">
-              {devices.map((device) => (
-                <li
-                  key={device.id || device.name || Math.random().toString(36)}
-                  className="rounded border border-gray-300 px-3 py-2"
-                >
-                  <div className="font-medium">
-                    {device.name || "Unnamed device"}
-                  </div>
-                  {device.id && (
-                    <div className="text-xs text-gray-600 break-all">
-                      {device.id}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
           </div>
         )}
       </div>
