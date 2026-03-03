@@ -58,6 +58,41 @@ export type MuseConnectionOptions = {
   onTelemetry?: (telemetry: MuseTelemetry) => void;
 };
 
+type GattCharacteristic = {
+  value: DataView | null;
+  startNotifications(): Promise<void>;
+  writeValue(value: Uint8Array): Promise<void>;
+  addEventListener(type: string, listener: (event: BluetoothValueEvent) => void): void;
+};
+
+type GattService = {
+  getCharacteristic(characteristicUuid: string): Promise<GattCharacteristic>;
+};
+
+type GattServer = {
+  getPrimaryService(serviceUuid: string): Promise<GattService>;
+};
+
+type NavigatorWithBluetooth = Navigator & {
+  bluetooth: {
+    requestDevice(options: {
+      filters: Array<{ namePrefix: string }>;
+      optionalServices: string[];
+    }): Promise<{
+      addEventListener(type: string, listener: () => void): void;
+      gatt: {
+        connect(): Promise<GattServer>;
+      } | null;
+    }>;
+  };
+};
+
+type BluetoothValueEvent = Event & {
+  target: {
+    value: DataView | null;
+  };
+};
+
 export async function connectMuse(options: MuseConnectionOptions = {}): Promise<void> {
   const { onStatusChange, onEeg, onTelemetry } = options;
 
@@ -71,7 +106,8 @@ export async function connectMuse(options: MuseConnectionOptions = {}): Promise<
 
   updateStatus("Requesting device…");
 
-  const device: BluetoothDevice = await (navigator as any).bluetooth.requestDevice(
+  const bluetooth = (navigator as NavigatorWithBluetooth).bluetooth;
+  const device = await bluetooth.requestDevice(
     {
       filters: [
         { namePrefix: "Ganglion-" },
@@ -105,8 +141,8 @@ export async function connectMuse(options: MuseConnectionOptions = {}): Promise<
       TELEMETRY_CHARACTERISTIC
     );
     await telemetryChar.startNotifications();
-    telemetryChar.addEventListener("characteristicvaluechanged", (event) => {
-      const value = (event.target as BluetoothRemoteGATTCharacteristic).value;
+    telemetryChar.addEventListener("characteristicvaluechanged", (event: BluetoothValueEvent) => {
+      const value = event.target.value;
       if (!value) return;
       const dv = new DataView(value.buffer);
       const sequenceId = dv.getUint16(0);
@@ -127,9 +163,8 @@ export async function connectMuse(options: MuseConnectionOptions = {}): Promise<
     const eegChar = await service.getCharacteristic(characteristicId);
     await eegChar.startNotifications();
 
-    eegChar.addEventListener("characteristicvaluechanged", (event: Event) => {
-      const characteristic = event.target as BluetoothRemoteGATTCharacteristic;
-      const value = characteristic.value;
+    eegChar.addEventListener("characteristicvaluechanged", (event: BluetoothValueEvent) => {
+      const value = event.target.value;
       if (!value) return;
 
       const bytes = new Uint8Array(value.buffer);
@@ -152,4 +187,3 @@ export async function connectMuse(options: MuseConnectionOptions = {}): Promise<
 }
 
 export { EEG_FREQUENCY, EEG_SAMPLES_PER_READING };
-
