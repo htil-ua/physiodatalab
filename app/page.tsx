@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 
-const MUSE_GATT_SERVICE = "273e0001-4c4d-454d-96be-f03bac821358";
+const MUSE_GATT_SERVICE = "fe8d0001-b5a3-f393-e0a9-e50e24dcca9e";
+const MUSE_CONTROL_CHARACTERISTIC = "273e0001-4c4d-454d-96be-f03bac821358";
 
 const EEG_CHARACTERISTICS = [
   { id: "tp9", label: "TP9", uuid: "273e0003-4c4d-454d-96be-f03bac821358" },
@@ -30,15 +31,25 @@ const EMPTY_SERIES: ChannelSeries = {
 const MAX_RECENT_PACKETS = 30;
 const MAX_SERIES_POINTS = 120;
 
-function decodeMuseEegPacket(dataView: DataView) {
-  const sequence = dataView.getUint16(0);
+function decodeUnsigned12BitData(bytes: Uint8Array) {
   const samples: number[] = [];
 
-  for (let index = 2; index < dataView.byteLength; index += 2) {
-    samples.push(dataView.getUint16(index));
+  for (let index = 0; index + 2 < bytes.length; index += 3) {
+    const first = (bytes[index] << 4) | (bytes[index + 1] >> 4);
+    const second = ((bytes[index + 1] & 0x0f) << 8) | bytes[index + 2];
+    samples.push(first, second);
   }
 
-  return { sequence, samples };
+  return samples;
+}
+
+function decodeMuseEegPacket(dataView: DataView) {
+  const sequence = dataView.getUint16(0);
+  const payload = new Uint8Array(dataView.buffer, dataView.byteOffset + 2);
+  const rawSamples = decodeUnsigned12BitData(payload);
+  const microvolts = rawSamples.map((sample) => (sample - 2048) * 0.48828125);
+
+  return { sequence, samples: microvolts };
 }
 
 function buildPath(values: number[], width: number, height: number) {
@@ -57,6 +68,27 @@ function buildPath(values: number[], width: number, height: number) {
       return `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(" ");
+}
+
+async function sendMuseCommand(
+  controlCharacteristic: BluetoothRemoteGATTCharacteristic,
+  command: string,
+) {
+  const encoded = new TextEncoder().encode(command);
+  const framed = new Uint8Array(encoded.length + 2);
+  framed[0] = encoded.length + 1;
+  framed.set(encoded, 1);
+  framed[framed.length - 1] = 10;
+
+  await controlCharacteristic.writeValueWithoutResponse(framed);
+}
+
+async function startMuseStreaming(
+  controlCharacteristic: BluetoothRemoteGATTCharacteristic,
+) {
+  await sendMuseCommand(controlCharacteristic, "h");
+  await sendMuseCommand(controlCharacteristic, "p20");
+  await sendMuseCommand(controlCharacteristic, "s");
 }
 
 export default function Home() {
@@ -105,10 +137,13 @@ export default function Home() {
       }
 
       const service = await server.getPrimaryService(MUSE_GATT_SERVICE);
+      const controlCharacteristic = await service.getCharacteristic(
+        MUSE_CONTROL_CHARACTERISTIC,
+      );
 
       setDeviceName(device.name || "Unnamed Muse device");
       setIsConnected(true);
-      setStatus("Connected. Streaming EEG notifications...");
+      setStatus("Connected. Configuring Muse stream...");
       setSamples([]);
       setSeries(EMPTY_SERIES);
 
@@ -134,7 +169,10 @@ export default function Home() {
 
             const decoded = decodeMuseEegPacket(packet);
 
-            console.log(`[Muse EEG] ${characteristicInfo.label} seq=${decoded.sequence}`, decoded.samples);
+            console.log(
+              `[Muse EEG] ${characteristicInfo.label} seq=${decoded.sequence}`,
+              decoded.samples,
+            );
 
             setSamples((previousSamples) => {
               const nextSample: MuseSample = {
@@ -163,6 +201,9 @@ export default function Home() {
 
         await characteristic.startNotifications();
       }
+
+      await startMuseStreaming(controlCharacteristic);
+      setStatus("Streaming EEG notifications...");
     } catch (error) {
       const message =
         error instanceof Error
@@ -261,8 +302,8 @@ export default function Home() {
                     className="px-4 py-2 text-xs text-slate-700"
                   >
                     <span className="font-semibold">{sample.receivedAt}</span> ·{" "}
-                    {sample.channel} · seq {sample.sequence} · raw [
-                    {sample.samples.join(", ")}]
+                    {sample.channel} · seq {sample.sequence} · µV [
+                    {sample.samples.map((value) => value.toFixed(2)).join(", ")}]
                   </li>
                 ))}
               </ul>
