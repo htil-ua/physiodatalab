@@ -18,6 +18,18 @@ type MuseSample = {
   receivedAt: string;
 };
 
+type ChannelSeries = Record<(typeof EEG_CHARACTERISTICS)[number]["id"], number[]>;
+
+const EMPTY_SERIES: ChannelSeries = {
+  tp9: [],
+  af7: [],
+  af8: [],
+  tp10: [],
+};
+
+const MAX_RECENT_PACKETS = 30;
+const MAX_SERIES_POINTS = 120;
+
 function decodeMuseEegPacket(dataView: DataView) {
   const sequence = dataView.getUint16(0);
   const samples: number[] = [];
@@ -29,6 +41,24 @@ function decodeMuseEegPacket(dataView: DataView) {
   return { sequence, samples };
 }
 
+function buildPath(values: number[], width: number, height: number) {
+  if (values.length < 2) {
+    return "";
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(max - min, 1);
+
+  return values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * width;
+      const y = height - ((value - min) / span) * height;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
 export default function Home() {
   const [scanNearby, setScanNearby] = useState(false);
   const [status, setStatus] = useState("Not connected to a Muse device.");
@@ -36,6 +66,7 @@ export default function Home() {
   const [isConnected, setIsConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [samples, setSamples] = useState<MuseSample[]>([]);
+  const [series, setSeries] = useState<ChannelSeries>(EMPTY_SERIES);
 
   const connectLabel = useMemo(() => {
     if (isConnecting) {
@@ -79,6 +110,7 @@ export default function Home() {
       setIsConnected(true);
       setStatus("Connected. Streaming EEG notifications...");
       setSamples([]);
+      setSeries(EMPTY_SERIES);
 
       device.addEventListener("gattserverdisconnected", () => {
         setIsConnected(false);
@@ -102,6 +134,8 @@ export default function Home() {
 
             const decoded = decodeMuseEegPacket(packet);
 
+            console.log(`[Muse EEG] ${characteristicInfo.label} seq=${decoded.sequence}`, decoded.samples);
+
             setSamples((previousSamples) => {
               const nextSample: MuseSample = {
                 channel: characteristicInfo.label,
@@ -110,7 +144,19 @@ export default function Home() {
                 receivedAt: new Date().toLocaleTimeString(),
               };
 
-              return [nextSample, ...previousSamples].slice(0, 20);
+              return [nextSample, ...previousSamples].slice(0, MAX_RECENT_PACKETS);
+            });
+
+            setSeries((previousSeries) => {
+              const nextValues = [
+                ...previousSeries[characteristicInfo.id],
+                ...decoded.samples,
+              ].slice(-MAX_SERIES_POINTS);
+
+              return {
+                ...previousSeries,
+                [characteristicInfo.id]: nextValues,
+              };
             });
           },
         );
@@ -132,7 +178,7 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 py-10">
-      <main className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+      <main className="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
         <h1 className="text-3xl font-bold text-slate-900">Physio Data Lab</h1>
         <p className="mt-2 text-sm text-slate-600">
           Connect to a Muse 2 EEG headset and inspect incoming BLE data packets.
@@ -162,20 +208,61 @@ export default function Home() {
         <p className="mt-4 text-sm text-slate-600">{status}</p>
 
         {isConnected && (
-          <section className="mt-6 rounded-lg border border-slate-200">
-            <header className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800">
+          <section className="mt-6 space-y-4 rounded-lg border border-slate-200 p-4">
+            <header className="text-sm font-semibold text-slate-800">
               Live data from {deviceName}
             </header>
 
+            <div className="grid gap-3 md:grid-cols-2">
+              {EEG_CHARACTERISTICS.map((characteristic) => {
+                const values = series[characteristic.id];
+                const hasData = values.length > 1;
+
+                return (
+                  <article
+                    key={characteristic.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <h3 className="text-xs font-semibold text-slate-800">
+                      {characteristic.label}
+                    </h3>
+                    {hasData ? (
+                      <svg
+                        viewBox="0 0 320 90"
+                        className="mt-2 h-24 w-full rounded bg-white"
+                        role="img"
+                        aria-label={`${characteristic.label} EEG waveform`}
+                      >
+                        <path
+                          d={buildPath(values, 320, 90)}
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          className="text-blue-600"
+                        />
+                      </svg>
+                    ) : (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Waiting for channel samples...
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+
             {samples.length === 0 ? (
-              <p className="px-4 py-3 text-sm text-slate-600">
-                Waiting for EEG samples...
-              </p>
+              <p className="text-sm text-slate-600">Waiting for EEG samples...</p>
             ) : (
-              <ul className="max-h-80 divide-y divide-slate-100 overflow-auto">
+              <ul className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-100">
                 {samples.map((sample, index) => (
-                  <li key={`${sample.channel}-${sample.sequence}-${index}`} className="px-4 py-2 text-xs text-slate-700">
-                    <span className="font-semibold">{sample.receivedAt}</span> · {sample.channel} · seq {sample.sequence} · raw [{sample.samples.join(", ")}]
+                  <li
+                    key={`${sample.channel}-${sample.sequence}-${index}`}
+                    className="px-4 py-2 text-xs text-slate-700"
+                  >
+                    <span className="font-semibold">{sample.receivedAt}</span> ·{" "}
+                    {sample.channel} · seq {sample.sequence} · raw [
+                    {sample.samples.join(", ")}]
                   </li>
                 ))}
               </ul>
