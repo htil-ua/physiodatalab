@@ -32,3 +32,15 @@ Because `BCIDevice` can export different class names/APIs depending on version, 
 - Streaming hooks: Rx-like `eegReadings.subscribe(...)` or EventEmitter-style `on('sample', ...)`.
 
 If your BCIDevice fork uses different method/event names, update `lib/bci-client.ts` accordingly.
+
+
+## Troubleshooting TypeScript install/build errors
+
+If you see parser errors from `node_modules/@types/node/*.d.ts` (for example `TS1128`/`TS1005` inside `http.d.ts`), make sure your local TypeScript compiler is not older than the one pinned in this repo and reinstall cleanly:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+```
+
+This project pins `typescript@5.4.5` and `@types/node@18.19.45` to avoid parser incompatibilities seen with some environments.
