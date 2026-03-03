@@ -13,12 +13,18 @@ type BleDeviceInfo = {
 const MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb";
 const EEG_CHARACTERISTIC_UUID = "273e0003-4c4d-454d-96be-f03bac821358";
 
+type EegSample = {
+  t: number;
+  value: number;
+};
+
 export default function HomeClient() {
   const [devices, setDevices] = useState<BleDeviceInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [museStatus, setMuseStatus] = useState<string>("Disconnected");
   const [lastEegSample, setLastEegSample] = useState<string | null>(null);
+  const [eegSeries, setEegSeries] = useState<EegSample[]>([]);
 
   const handleScanClick = async () => {
     setError(null);
@@ -96,8 +102,26 @@ export default function HomeClient() {
 
           const bytes = new Uint8Array(value.buffer);
 
-          // For now, just log the raw bytes and keep a small text version in state.
+          // For now, just log the raw bytes and keep both
+          // a numeric preview and a rolling series for plotting.
           console.log("Muse EEG packet (raw bytes)", bytes);
+
+          // Treat each byte as a simple sample value 0–255.
+          // This is not a full Muse protocol decode, but is
+          // sufficient to show live streaming behavior.
+          const now = performance.now();
+          const newSamples: EegSample[] = Array.from(bytes).map(
+            (v, index) => ({
+              t: now + index,
+              value: v,
+            })
+          );
+
+          setEegSeries((prev) => {
+            const maxPoints = 256;
+            const combined = [...prev, ...newSamples];
+            return combined.slice(-maxPoints);
+          });
 
           // Show first few bytes so the UI proves we're receiving data.
           const preview = Array.from(bytes.slice(0, 16)).join(", ");
@@ -151,10 +175,45 @@ export default function HomeClient() {
           <p className="text-sm text-red-600 max-w-md text-center">{error}</p>
         )}
 
+        {eegSeries.length > 1 && (
+          <div className="mt-4 w-full max-w-xl">
+            <h2 className="mb-1 text-sm font-semibold text-center">
+              Live EEG bytes (simple preview)
+            </h2>
+            <div className="border border-gray-300 rounded bg-white">
+              <svg viewBox="0 0 400 100" className="w-full h-24">
+                {(() => {
+                  const values = eegSeries.map((p) => p.value);
+                  const minV = Math.min(...values);
+                  const maxV = Math.max(...values);
+                  const range = maxV - minV || 1;
+                  const points = eegSeries
+                    .map((p, i) => {
+                      const x =
+                        (i / Math.max(eegSeries.length - 1, 1)) * 400;
+                      const norm = (p.value - minV) / range;
+                      const y = 100 - norm * 80 - 10; // padding top/bottom
+                      return `${x},${y}`;
+                    })
+                    .join(" ");
+                  return (
+                    <polyline
+                      fill="none"
+                      stroke="#4f46e5"
+                      strokeWidth="2"
+                      points={points}
+                    />
+                  );
+                })()}
+              </svg>
+            </div>
+          </div>
+        )}
+
         {lastEegSample && (
-          <div className="mt-2 text-xs text-gray-700 max-w-md text-center break-all">
+          <div className="mt-2 text-xs text-gray-700 max-w-xl text-center break-all">
             <div className="font-semibold mb-1">
-              Last EEG packet (first 16 bytes)
+              Last EEG packet bytes (first 16)
             </div>
             <div>{lastEegSample}</div>
           </div>
