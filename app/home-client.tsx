@@ -26,6 +26,7 @@ export default function HomeClient() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordedSampleCount, setRecordedSampleCount] = useState(0);
   const csvRowsRef = useRef<string[]>([]);
+  const isRecordingRef = useRef(false);
 
   const buildCsvFileName = () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -55,13 +56,15 @@ export default function HomeClient() {
   const handleToggleRecording = () => {
     setError(null);
 
-    if (isRecording) {
+    if (isRecordingRef.current) {
+      isRecordingRef.current = false;
       setIsRecording(false);
       return;
     }
 
     csvRowsRef.current = [];
     setRecordedSampleCount(0);
+    isRecordingRef.current = true;
     setIsRecording(true);
   };
 
@@ -100,7 +103,7 @@ export default function HomeClient() {
             return next;
           });
 
-          if (isRecording) {
+          if (isRecordingRef.current) {
             const nowEpochMs = Date.now();
             const samplePeriodMs = 1000 / DEFAULT_SAMPLING_FREQUENCY;
             const label = CHANNEL_LABELS[channelIndex] ?? `channel-${channelIndex}`;
