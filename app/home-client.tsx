@@ -15,7 +15,14 @@ type EegSample = {
 const DEFAULT_SAMPLING_FREQUENCY = EEG_FREQUENCY ?? 256;
 const DEFAULT_SECONDS_TO_PLOT = 5;
 
-const CHANNEL_LABELS = ["Tp9", "AF7", "AF8", "TP10"];
+const CHANNEL_LABELS = ["Tp9", "AF7", "AF8", "TP10"] as const;
+
+type CsvRow = {
+  timestampMs: number;
+  packetIndex: number;
+  sampleIndex: number;
+  channelValues: Array<number | null>;
+};
 
 export default function HomeClient() {
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +32,7 @@ export default function HomeClient() {
   );
   const [isRecording, setIsRecording] = useState(false);
   const [recordedSampleCount, setRecordedSampleCount] = useState(0);
-  const csvRowsRef = useRef<string[]>([]);
+  const recordedRowsRef = useRef<Map<string, CsvRow>>(new Map());
   const isRecordingRef = useRef(false);
 
   const buildCsvFileName = () => {
@@ -34,14 +41,25 @@ export default function HomeClient() {
   };
 
   const downloadCsv = () => {
-    if (csvRowsRef.current.length === 0) {
+    if (recordedRowsRef.current.size === 0) {
       setError("No EEG samples available to save yet.");
       return;
     }
 
-    const header =
-      "timestamp_ms,channel_index,channel_label,packet_index,sample_index,value_uv";
-    const csvBody = [header, ...csvRowsRef.current].join("\n");
+    const header = ["timestamp_ms", ...CHANNEL_LABELS].join(",");
+    const sortedRows = [...recordedRowsRef.current.values()].sort((a, b) => {
+      if (a.packetIndex !== b.packetIndex) return a.packetIndex - b.packetIndex;
+      return a.sampleIndex - b.sampleIndex;
+    });
+
+    const csvRows = sortedRows.map((row) => {
+      const values = row.channelValues.map((value) =>
+        value === null ? "" : value.toFixed(6)
+      );
+      return [row.timestampMs.toFixed(3), ...values].join(",");
+    });
+
+    const csvBody = [header, ...csvRows].join("\n");
     const blob = new Blob([csvBody], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -62,7 +80,7 @@ export default function HomeClient() {
       return;
     }
 
-    csvRowsRef.current = [];
+    recordedRowsRef.current = new Map();
     setRecordedSampleCount(0);
     isRecordingRef.current = true;
     setIsRecording(true);
@@ -106,22 +124,28 @@ export default function HomeClient() {
           if (isRecordingRef.current) {
             const nowEpochMs = Date.now();
             const samplePeriodMs = 1000 / DEFAULT_SAMPLING_FREQUENCY;
-            const label = CHANNEL_LABELS[channelIndex] ?? `channel-${channelIndex}`;
 
-            const newRows = reading.samples.map((value, sampleIndex) => {
-              const timestampMs = nowEpochMs + sampleIndex * samplePeriodMs;
-              return [
-                timestampMs.toFixed(3),
-                channelIndex,
-                label,
-                reading.index,
+            reading.samples.forEach((value, sampleIndex) => {
+              const key = `${reading.index}-${sampleIndex}`;
+              const existingRow = recordedRowsRef.current.get(key);
+
+              if (existingRow) {
+                existingRow.channelValues[channelIndex] = value;
+                return;
+              }
+
+              const channelValues = CHANNEL_LABELS.map(() => null as number | null);
+              channelValues[channelIndex] = value;
+
+              recordedRowsRef.current.set(key, {
+                timestampMs: nowEpochMs + sampleIndex * samplePeriodMs,
+                packetIndex: reading.index,
                 sampleIndex,
-                value.toFixed(6),
-              ].join(",");
+                channelValues,
+              });
             });
 
-            csvRowsRef.current.push(...newRows);
-            setRecordedSampleCount((prev) => prev + newRows.length);
+            setRecordedSampleCount(recordedRowsRef.current.size);
           }
         },
       });

@@ -28,7 +28,7 @@ After connecting to a Muse device, you can:
 - Click **Stop Recording** to pause data capture.
 - Click **Save EEG CSV** to download the currently recorded data as a CSV file.
 
-The CSV includes timestamp, channel index/label, packet index, per-packet sample index, and value in microvolts.
+The CSV is exported in wide format: one `timestamp_ms` column plus four EEG channel columns (`Tp9`, `AF7`, `AF8`, `TP10`). Each row represents a sample index across channels.
 
 ## Learn More
 
