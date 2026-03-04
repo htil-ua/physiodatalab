@@ -20,6 +20,16 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## EEG CSV Recording
+
+After connecting to a Muse device, you can:
+
+- Click **Start Recording** to begin collecting incoming EEG samples.
+- Click **Stop Recording** to pause data capture.
+- Click **Save EEG CSV** to download the currently recorded data as a CSV file.
+
+The CSV is exported in wide format: one `timestamp_ms` column plus four EEG channel columns (`Tp9`, `AF7`, `AF8`, `TP10`). Each row represents a sample index across channels.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
