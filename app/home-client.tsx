@@ -1,10 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   connectMuse,
   EEG_FREQUENCY,
-  EEG_SAMPLES_PER_READING,
   type MuseEegReading,
 } from "../lib/museClient";
 
@@ -24,6 +23,47 @@ export default function HomeClient() {
   const [eegSeriesByChannel, setEegSeriesByChannel] = useState<EegSample[][]>(
     () => CHANNEL_LABELS.map(() => [])
   );
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedSampleCount, setRecordedSampleCount] = useState(0);
+  const csvRowsRef = useRef<string[]>([]);
+
+  const buildCsvFileName = () => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    return `eeg-recording-${stamp}.csv`;
+  };
+
+  const downloadCsv = () => {
+    if (csvRowsRef.current.length === 0) {
+      setError("No EEG samples available to save yet.");
+      return;
+    }
+
+    const header =
+      "timestamp_ms,channel_index,channel_label,packet_index,sample_index,value_uv";
+    const csvBody = [header, ...csvRowsRef.current].join("\n");
+    const blob = new Blob([csvBody], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", buildCsvFileName());
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleToggleRecording = () => {
+    setError(null);
+
+    if (isRecording) {
+      setIsRecording(false);
+      return;
+    }
+
+    csvRowsRef.current = [];
+    setRecordedSampleCount(0);
+    setIsRecording(true);
+  };
 
   const handleConnectMuseClick = async () => {
     setError(null);
@@ -59,16 +99,38 @@ export default function HomeClient() {
             next[channelIndex] = trimmed;
             return next;
           });
+
+          if (isRecording) {
+            const nowEpochMs = Date.now();
+            const samplePeriodMs = 1000 / DEFAULT_SAMPLING_FREQUENCY;
+            const label = CHANNEL_LABELS[channelIndex] ?? `channel-${channelIndex}`;
+
+            const newRows = reading.samples.map((value, sampleIndex) => {
+              const timestampMs = nowEpochMs + sampleIndex * samplePeriodMs;
+              return [
+                timestampMs.toFixed(3),
+                channelIndex,
+                label,
+                reading.index,
+                sampleIndex,
+                value.toFixed(6),
+              ].join(",");
+            });
+
+            csvRowsRef.current.push(...newRows);
+            setRecordedSampleCount((prev) => prev + newRows.length);
+          }
         },
       });
-    } catch (err: any) {
-      if (err?.name === "NotFoundError") {
+    } catch (err: unknown) {
+      if ((err as { name?: string } | null)?.name === "NotFoundError") {
         setMuseStatus("Disconnected");
         return;
       }
 
       console.error("Failed to connect to Muse", err);
-      setError(err?.message ?? "Failed to connect to Muse device.");
+      const message = err instanceof Error ? err.message : "Failed to connect to Muse device.";
+      setError(message);
       setMuseStatus("Disconnected");
     }
   };
@@ -91,6 +153,29 @@ export default function HomeClient() {
 
           <p className="text-xs text-gray-600">
             Status: <span className="font-semibold">{museStatus}</span>
+          </p>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={handleToggleRecording}
+              className="rounded bg-emerald-600 px-4 py-2 text-white font-semibold hover:bg-emerald-700"
+            >
+              {isRecording ? "Stop Recording" : "Start Recording"}
+            </button>
+
+            <button
+              type="button"
+              onClick={downloadCsv}
+              disabled={recordedSampleCount === 0}
+              className="rounded bg-slate-700 px-4 py-2 text-white font-semibold hover:bg-slate-800 disabled:opacity-60"
+            >
+              Save EEG CSV
+            </button>
+          </div>
+
+          <p className="text-xs text-gray-600">
+            Recorded samples: <span className="font-semibold">{recordedSampleCount}</span>
           </p>
         </div>
 
@@ -158,5 +243,4 @@ export default function HomeClient() {
     </div>
   );
 }
-
 
