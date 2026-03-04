@@ -7,6 +7,11 @@ import {
   EEG_FREQUENCY,
   type MuseEegReading,
 } from "../lib/museClient";
+import {
+  appendMuseReadingToBuffer,
+  downloadMuseCsv,
+  type CsvRow,
+} from "../lib/muse-data-handler";
 
 type EegSample = {
   t: number;
@@ -17,13 +22,6 @@ const DEFAULT_SAMPLING_FREQUENCY = EEG_FREQUENCY ?? 256;
 const DEFAULT_SECONDS_TO_PLOT = 5;
 
 const CHANNEL_LABELS = ["Tp9", "AF7", "AF8", "TP10"] as const;
-
-type CsvRow = {
-  timestampMs: number;
-  packetIndex: number;
-  sampleIndex: number;
-  channelValues: Array<number | null>;
-};
 
 export default function HomeClient() {
   const [error, setError] = useState<string | null>(null);
@@ -36,40 +34,14 @@ export default function HomeClient() {
   const recordedRowsRef = useRef<Map<string, CsvRow>>(new Map());
   const isRecordingRef = useRef(false);
 
-  const buildCsvFileName = () => {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    return `eeg-recording-${stamp}.csv`;
-  };
-
-  const downloadCsv = () => {
-    if (recordedRowsRef.current.size === 0) {
-      setError("No EEG samples available to save yet.");
-      return;
+  const handleDownloadCsv = () => {
+    try {
+      downloadMuseCsv(recordedRowsRef.current, CHANNEL_LABELS);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to save EEG CSV.";
+      setError(message);
     }
-
-    const header = ["timestamp_ms", ...CHANNEL_LABELS].join(",");
-    const sortedRows = [...recordedRowsRef.current.values()].sort((a, b) => {
-      if (a.packetIndex !== b.packetIndex) return a.packetIndex - b.packetIndex;
-      return a.sampleIndex - b.sampleIndex;
-    });
-
-    const csvRows = sortedRows.map((row) => {
-      const values = row.channelValues.map((value) =>
-        value === null ? "" : value.toFixed(6)
-      );
-      return [row.timestampMs.toFixed(3), ...values].join(",");
-    });
-
-    const csvBody = [header, ...csvRows].join("\n");
-    const blob = new Blob([csvBody], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", buildCsvFileName());
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   const handleToggleRecording = () => {
@@ -123,27 +95,12 @@ export default function HomeClient() {
           });
 
           if (isRecordingRef.current) {
-            const nowEpochMs = Date.now();
-            const samplePeriodMs = 1000 / DEFAULT_SAMPLING_FREQUENCY;
-
-            reading.samples.forEach((value, sampleIndex) => {
-              const key = `${reading.index}-${sampleIndex}`;
-              const existingRow = recordedRowsRef.current.get(key);
-
-              if (existingRow) {
-                existingRow.channelValues[channelIndex] = value;
-                return;
-              }
-
-              const channelValues = CHANNEL_LABELS.map(() => null as number | null);
-              channelValues[channelIndex] = value;
-
-              recordedRowsRef.current.set(key, {
-                timestampMs: nowEpochMs + sampleIndex * samplePeriodMs,
-                packetIndex: reading.index,
-                sampleIndex,
-                channelValues,
-              });
+            appendMuseReadingToBuffer({
+              buffer: recordedRowsRef.current,
+              reading,
+              channelIndex,
+              channelLabels: CHANNEL_LABELS,
+              samplingFrequency: DEFAULT_SAMPLING_FREQUENCY,
             });
 
             setRecordedSampleCount(recordedRowsRef.current.size);
@@ -194,7 +151,7 @@ export default function HomeClient() {
 
             <button
               type="button"
-              onClick={downloadCsv}
+              onClick={handleDownloadCsv}
               disabled={recordedSampleCount === 0}
               className="rounded bg-slate-700 px-4 py-2 text-white font-semibold hover:bg-slate-800 disabled:opacity-60"
             >
