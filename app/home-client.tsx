@@ -2,6 +2,8 @@
 
 import { useRef, useState } from "react";
 import EegPlot from "./eeg-plot";
+import PsdPlot from "./psd-plot";
+import BandScatter from "./band-scatter";
 import {
   connectMuse,
   EEG_FREQUENCY,
@@ -168,10 +170,24 @@ export default function HomeClient() {
           <p className="text-sm text-red-600 max-w-md text-center">{error}</p>
         )}
 
-        <EegPlot
-          channelLabels={CHANNEL_LABELS}
-          eegSeriesByChannel={eegSeriesByChannel}
-        />
+        <div className="mt-6 w-[94vw] max-w-none grid grid-cols-2 gap-4 items-start">
+          <EegPlot
+            channelLabels={CHANNEL_LABELS}
+            eegSeriesByChannel={eegSeriesByChannel}
+          />
+          <PsdPlot
+            channelLabels={CHANNEL_LABELS}
+            eegSeriesByChannel={eegSeriesByChannel}
+            samplingFrequency={DEFAULT_SAMPLING_FREQUENCY}
+          />
+          <div className="col-span-2">
+            <BandScatter
+              channelLabels={CHANNEL_LABELS}
+              eegSeriesByChannel={eegSeriesByChannel}
+              samplingFrequency={DEFAULT_SAMPLING_FREQUENCY}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
