@@ -30,6 +30,17 @@ After connecting to a Muse device, you can:
 
 The CSV is exported in wide format: one `timestamp_ms` column plus four EEG channel columns (`Tp9`, `AF7`, `AF8`, `TP10`). Each row represents a sample index across channels.
 
+
+## Flow-Based Programming Editor (Rete.js)
+
+The app now includes a Rete.js-powered flow editor beneath the EEG chart.
+
+- Channel source nodes (`TP9`, `AF7`, `AF8`) expose draggable output ports.
+- Filter nodes (for example, `60Hz Notch`, `1-40Hz Bandpass`, `Artifact Reject`) expose draggable input/output ports and can feed an output sink (`Visualizer`).
+- Draw and rewire connections interactively to model EEG signal-processing pipelines.
+
+The editor is served from `public/rete-flow.html` and attempts to load Rete.js modules from external CDNs at runtime (`esm.sh` with `jsdelivr` fallback). If the CDNs are unavailable, the page falls back to an offline basic graph editor so users can still drag nodes and wire channels to filters.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
