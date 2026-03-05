@@ -8,7 +8,7 @@
       :root { color-scheme: light; }
       body { margin: 0; font-family: Inter, system-ui, -apple-system, sans-serif; background: #f8fafc; }
       #editor { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
-      #links { position: absolute; inset: 0; pointer-events: none; }
+      #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
       .node { position: absolute; width: 220px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08); }
       .node-header { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; font-weight: 600; background: #f8fafc; cursor: move; user-select: none; }
       .node-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
@@ -131,7 +131,7 @@
       };
 
       const initializeFallbackEditor = () => {
-        container.innerHTML = '<svg id="links"></svg>';
+        container.innerHTML = '<svg id="links" width="100%" height="100%" preserveAspectRatio="none"></svg>';
         const links = container.querySelector("#links");
         const nodes = [
           { id: "tp9", title: "Channel: TP9", x: 40, y: 60, input: false, output: true },
@@ -163,6 +163,7 @@
             path.setAttribute("d", `M ${from.x} ${from.y} C ${from.x + cx} ${from.y}, ${to.x - cx} ${to.y}, ${to.x} ${to.y}`);
             path.setAttribute("stroke", "#0f766e");
             path.setAttribute("stroke-width", "3");
+            path.setAttribute("vector-effect", "non-scaling-stroke");
             path.setAttribute("fill", "none");
             links.appendChild(path);
           }
@@ -206,6 +207,7 @@
           const target = event.target;
           if (!(target instanceof HTMLElement) || !target.classList.contains("port")) return;
           const id = target.dataset.portId;
+          if (!id) return;
 
           if (target.classList.contains("output")) {
             container.querySelectorAll(".port.pending").forEach((el) => el.classList.remove("pending"));
