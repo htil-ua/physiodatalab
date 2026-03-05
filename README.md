@@ -39,7 +39,7 @@ The app now includes a Rete.js-powered flow editor beneath the EEG chart.
 - Filter nodes (for example, `60Hz Notch`, `1-40Hz Bandpass`) expose draggable input/output ports.
 - Draw and rewire connections interactively to model EEG signal-processing pipelines.
 
-The editor is served from `public/rete-flow.html` and loads Rete.js modules from `esm.sh` at runtime, so internet access is required when opening that page.
+The editor is served from `public/rete-flow.html` and attempts to load Rete.js modules from external CDNs at runtime (`esm.sh` with `jsdelivr` fallback). If the CDNs are unavailable, the page falls back to an offline basic graph editor so users can still drag nodes and wire channels to filters.
 
 ## Learn More
 
