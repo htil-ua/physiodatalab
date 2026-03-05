@@ -215,6 +215,21 @@ export default function HomeClient() {
           channelLabels={CHANNEL_LABELS}
           eegSeriesByChannel={eegSeriesByChannel}
         />
+
+
+        <section className="w-full max-w-6xl px-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-2 text-xl font-semibold">Flow Editor (Rete.js)</h2>
+            <p className="mb-3 text-sm text-slate-600">
+              Drag from EEG channel outputs to filter inputs to design a flow-based processing graph.
+            </p>
+            <iframe
+              title="Rete.js flow editor"
+              src="/rete-flow.html"
+              className="h-[520px] w-full rounded border border-slate-300"
+            />
+          </div>
+        </section>
       </div>
     </div>
   );

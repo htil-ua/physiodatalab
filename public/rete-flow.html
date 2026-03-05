@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Physio Data Lab Flow Editor</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, -apple-system, sans-serif;
+        background: #f8fafc;
+      }
+
+      #editor {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script type="module">
+      import { NodeEditor, ClassicPreset } from "https://esm.sh/rete@2.0.5";
+      import { AreaPlugin, AreaExtensions } from "https://esm.sh/rete-area-plugin@2.0.2";
+      import {
+        ConnectionPlugin,
+        Presets as ConnectionPresets,
+      } from "https://esm.sh/rete-connection-plugin@2.0.2";
+      import { ReactPlugin, Presets as ReactPresets } from "https://esm.sh/rete-react-plugin@2.0.2";
+      import { createRoot } from "https://esm.sh/react-dom@19.2.0/client";
+
+      const container = document.getElementById("editor");
+      const socket = new ClassicPreset.Socket("eeg-signal");
+
+      const createChannelNode = (label) => {
+        const channelNode = new ClassicPreset.Node(label);
+        channelNode.addOutput("signal", new ClassicPreset.Output(socket, "Signal"));
+        return channelNode;
+      };
+
+      const createFilterNode = (label) => {
+        const filterNode = new ClassicPreset.Node(label);
+        filterNode.addInput("signal", new ClassicPreset.Input(socket, "Signal"));
+        filterNode.addOutput("filtered", new ClassicPreset.Output(socket, "Filtered"));
+        return filterNode;
+      };
+
+      const initialize = async () => {
+        const editor = new NodeEditor();
+        const area = new AreaPlugin(container);
+        const connection = new ConnectionPlugin();
+        const reactRender = new ReactPlugin({ createRoot });
+
+        editor.use(area);
+        area.use(connection);
+        area.use(reactRender);
+
+        connection.addPreset(ConnectionPresets.classic.setup());
+        reactRender.addPreset(ReactPresets.classic.setup());
+
+        AreaExtensions.simpleNodesOrder(area);
+        AreaExtensions.selectableNodes(area, AreaExtensions.selector(), {
+          accumulating: AreaExtensions.accumulateOnCtrl(),
+        });
+
+        const tp9 = createChannelNode("Channel: TP9");
+        const af7 = createChannelNode("Channel: AF7");
+        const af8 = createChannelNode("Channel: AF8");
+
+        const notch = createFilterNode("Filter: 60Hz Notch");
+        const bandpass = createFilterNode("Filter: 1-40Hz Bandpass");
+
+        await editor.addNode(tp9);
+        await editor.addNode(af7);
+        await editor.addNode(af8);
+        await editor.addNode(notch);
+        await editor.addNode(bandpass);
+
+        await area.translate(tp9.id, { x: 40, y: 60 });
+        await area.translate(af7.id, { x: 40, y: 220 });
+        await area.translate(af8.id, { x: 40, y: 380 });
+        await area.translate(notch.id, { x: 420, y: 150 });
+        await area.translate(bandpass.id, { x: 420, y: 320 });
+
+        await editor.addConnection(new ClassicPreset.Connection(tp9, "signal", notch, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(af7, "signal", notch, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(af8, "signal", bandpass, "signal"));
+
+        AreaExtensions.zoomAt(area, editor.getNodes());
+      };
+
+      initialize().catch((error) => {
+        console.error("Failed to initialize Rete flow editor", error);
+        container.innerHTML =
+          '<p style="color:#b91c1c;padding:16px;">Unable to load the Rete.js editor. Check network access for esm.sh modules.</p>';
+      });
+    </script>
+  </body>
+</html>
