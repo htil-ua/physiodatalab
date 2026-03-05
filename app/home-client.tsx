@@ -164,8 +164,7 @@ export default function HomeClient() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="flex flex-col items-center gap-6">
+    <div className="flex min-h-screen w-full flex-col items-center gap-6 py-8">
         <h1 className="text-5xl font-bold">Physio Data Lab</h1>
 
         <div className="flex flex-col items-center gap-3">
@@ -217,8 +216,8 @@ export default function HomeClient() {
         />
 
 
-        <section className="w-full max-w-6xl px-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="w-screen">
+          <div className="border-y border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-2 text-xl font-semibold">Flow Editor (Rete.js)</h2>
             <p className="mb-3 text-sm text-slate-600">
               Drag from EEG channel outputs to filter inputs to design a flow-based processing graph.
@@ -230,7 +229,6 @@ export default function HomeClient() {
             />
           </div>
         </section>
-      </div>
     </div>
   );
 }
