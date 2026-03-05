@@ -85,9 +85,19 @@
         };
         const createFilterNode = (label) => {
           const filterNode = new ClassicPreset.Node(label);
-          filterNode.addInput("signal", new ClassicPreset.Input(socket, "Signal"));
+          const input = new ClassicPreset.Input(socket, "Signal");
+          input.multipleConnections = true;
+          filterNode.addInput("signal", input);
           filterNode.addOutput("filtered", new ClassicPreset.Output(socket, "Filtered"));
           return filterNode;
+        };
+
+        const createSinkNode = (label) => {
+          const sinkNode = new ClassicPreset.Node(label);
+          const input = new ClassicPreset.Input(socket, "Signal");
+          input.multipleConnections = true;
+          sinkNode.addInput("signal", input);
+          return sinkNode;
         };
 
         const editor = new NodeEditor();
@@ -112,19 +122,26 @@
         const af8 = createChannelNode("Channel: AF8");
         const notch = createFilterNode("Filter: 60Hz Notch");
         const bandpass = createFilterNode("Filter: 1-40Hz Bandpass");
+        const artifactReject = createFilterNode("Filter: Artifact Reject");
+        const visualizer = createSinkNode("Output: Visualizer");
 
         await editor.addNode(tp9); await editor.addNode(af7); await editor.addNode(af8);
-        await editor.addNode(notch); await editor.addNode(bandpass);
+        await editor.addNode(notch); await editor.addNode(bandpass); await editor.addNode(artifactReject); await editor.addNode(visualizer);
 
         await area.translate(tp9.id, { x: 40, y: 60 });
         await area.translate(af7.id, { x: 40, y: 220 });
         await area.translate(af8.id, { x: 40, y: 380 });
-        await area.translate(notch.id, { x: 420, y: 150 });
-        await area.translate(bandpass.id, { x: 420, y: 320 });
+        await area.translate(notch.id, { x: 400, y: 120 });
+        await area.translate(bandpass.id, { x: 400, y: 300 });
+        await area.translate(artifactReject.id, { x: 760, y: 210 });
+        await area.translate(visualizer.id, { x: 1080, y: 230 });
 
         await editor.addConnection(new ClassicPreset.Connection(tp9, "signal", notch, "signal"));
         await editor.addConnection(new ClassicPreset.Connection(af7, "signal", notch, "signal"));
         await editor.addConnection(new ClassicPreset.Connection(af8, "signal", bandpass, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(notch, "filtered", artifactReject, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(bandpass, "filtered", artifactReject, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(artifactReject, "filtered", visualizer, "signal"));
 
         AreaExtensions.zoomAt(area, editor.getNodes());
         addBadge(`Loaded Rete modules from ${cdn}`);
@@ -137,8 +154,10 @@
           { id: "tp9", title: "Channel: TP9", x: 40, y: 60, input: false, output: true },
           { id: "af7", title: "Channel: AF7", x: 40, y: 220, input: false, output: true },
           { id: "af8", title: "Channel: AF8", x: 40, y: 380, input: false, output: true },
-          { id: "notch", title: "Filter: 60Hz Notch", x: 420, y: 150, input: true, output: true },
-          { id: "bandpass", title: "Filter: 1-40Hz Bandpass", x: 420, y: 320, input: true, output: true },
+          { id: "notch", title: "Filter: 60Hz Notch", x: 400, y: 120, input: true, output: true },
+          { id: "bandpass", title: "Filter: 1-40Hz Bandpass", x: 400, y: 300, input: true, output: true },
+          { id: "artifact", title: "Filter: Artifact Reject", x: 760, y: 210, input: true, output: true },
+          { id: "visualizer", title: "Output: Visualizer", x: 1080, y: 230, input: true, output: false },
         ];
 
         let pendingOutput = null;
@@ -227,6 +246,9 @@
         connections.push({ from: "tp9:out", to: "notch:in" });
         connections.push({ from: "af7:out", to: "notch:in" });
         connections.push({ from: "af8:out", to: "bandpass:in" });
+        connections.push({ from: "notch:out", to: "artifact:in" });
+        connections.push({ from: "bandpass:out", to: "artifact:in" });
+        connections.push({ from: "artifact:out", to: "visualizer:in" });
         redraw();
         addBadge("Using offline fallback graph editor (Rete CDN unavailable)");
       };
