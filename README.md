@@ -38,6 +38,7 @@ The app now includes a Rete.js-powered flow editor beneath the EEG chart.
 - Channel source nodes (`TP9`, `AF7`, `AF8`) expose draggable output ports.
 - Filter nodes (for example, `60Hz Notch`, `1-40Hz Bandpass`) expose draggable input/output ports.
 - Draw and rewire connections interactively to model EEG signal-processing pipelines.
+- Click an existing connection line to delete it, or drag a new output into the same filter input to update (rewire) that edge.
 - The editor uses a playful, colorful node style designed to be more engaging for K-12 learners.
 - Incoming EEG samples are streamed from the Next.js app into the flow editor iframe via `postMessage`, and the editor displays a live per-channel value panel.
 
