@@ -206,10 +206,6 @@
         await area.translate(notch.id, { x: 420, y: 150 });
         await area.translate(bandpass.id, { x: 420, y: 320 });
 
-        await editor.addConnection(new ClassicPreset.Connection(tp9, "signal", notch, "signal"));
-        await editor.addConnection(new ClassicPreset.Connection(af7, "signal", notch, "signal"));
-        await editor.addConnection(new ClassicPreset.Connection(af8, "signal", bandpass, "signal"));
-
         AreaExtensions.zoomAt(area, editor.getNodes());
         addBadge(`Loaded Rete modules from ${cdn}`);
       };
@@ -225,8 +221,8 @@
           { id: "bandpass", title: "Filter: 1-40Hz Bandpass", x: 420, y: 320, input: true, output: true },
         ];
 
-        let pendingOutput = null;
         const connections = [];
+        let dragState = null;
 
         const getPortCenter = (el) => {
           const r = el.getBoundingClientRect();
@@ -234,8 +230,14 @@
           return { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
         };
 
+        const buildCurve = (from, to) => {
+          const cx = Math.max(80, (to.x - from.x) * 0.5);
+          return `M ${from.x} ${from.y} C ${from.x + cx} ${from.y}, ${to.x - cx} ${to.y}, ${to.x} ${to.y}`;
+        };
+
         const redraw = () => {
           links.innerHTML = "";
+
           for (const conn of connections) {
             const fromPort = container.querySelector(`[data-port-id='${conn.from}']`);
             const toPort = container.querySelector(`[data-port-id='${conn.to}']`);
@@ -244,13 +246,21 @@
             const from = getPortCenter(fromPort);
             const to = getPortCenter(toPort);
             const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            const cx = Math.max(80, (to.x - from.x) * 0.5);
-            path.setAttribute(
-              "d",
-              `M ${from.x} ${from.y} C ${from.x + cx} ${from.y}, ${to.x - cx} ${to.y}, ${to.x} ${to.y}`
-            );
+            path.setAttribute("d", buildCurve(from, to));
             path.setAttribute("stroke", "#0f766e");
             path.setAttribute("stroke-width", "3");
+            path.setAttribute("vector-effect", "non-scaling-stroke");
+            path.setAttribute("fill", "none");
+            links.appendChild(path);
+          }
+
+          if (dragState) {
+            const from = getPortCenter(dragState.fromPort);
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", buildCurve(from, dragState.pointer));
+            path.setAttribute("stroke", "#0ea5e9");
+            path.setAttribute("stroke-width", "2");
+            path.setAttribute("stroke-dasharray", "6 4");
             path.setAttribute("vector-effect", "non-scaling-stroke");
             path.setAttribute("fill", "none");
             links.appendChild(path);
@@ -303,30 +313,54 @@
 
         for (const node of nodes) makeNode(node);
 
-        container.addEventListener("click", (event) => {
+        container.addEventListener("pointerdown", (event) => {
           const target = event.target;
-          if (!(target instanceof HTMLElement) || !target.classList.contains("port")) return;
+          if (!(target instanceof HTMLElement) || !target.classList.contains("output")) return;
+
           const id = target.dataset.portId;
           if (!id) return;
 
-          if (target.classList.contains("output")) {
-            container.querySelectorAll(".port.pending").forEach((el) => el.classList.remove("pending"));
-            target.classList.add("pending");
-            pendingOutput = id;
-            return;
-          }
+          dragState = {
+            from: id,
+            fromPort: target,
+            pointer: { x: event.clientX - container.getBoundingClientRect().left, y: event.clientY - container.getBoundingClientRect().top },
+          };
 
-          if (target.classList.contains("input") && pendingOutput) {
-            connections.push({ from: pendingOutput, to: id });
-            pendingOutput = null;
-            container.querySelectorAll(".port.pending").forEach((el) => el.classList.remove("pending"));
-            redraw();
-          }
+          target.classList.add("pending");
+          target.setPointerCapture(event.pointerId);
+          redraw();
         });
 
-        connections.push({ from: "tp9:out", to: "notch:in" });
-        connections.push({ from: "af7:out", to: "notch:in" });
-        connections.push({ from: "af8:out", to: "bandpass:in" });
+        container.addEventListener("pointermove", (event) => {
+          if (!dragState) return;
+          const c = container.getBoundingClientRect();
+          dragState.pointer = { x: event.clientX - c.left, y: event.clientY - c.top };
+          redraw();
+        });
+
+        const clearDragState = () => {
+          if (!dragState) return;
+          dragState.fromPort.classList.remove("pending");
+          dragState = null;
+          redraw();
+        };
+
+        container.addEventListener("pointerup", (event) => {
+          if (!dragState) return;
+
+          const target = event.target;
+          if (target instanceof HTMLElement && target.classList.contains("input")) {
+            const to = target.dataset.portId;
+            if (to && !connections.some((conn) => conn.from === dragState.from && conn.to === to)) {
+              connections.push({ from: dragState.from, to });
+            }
+          }
+
+          clearDragState();
+        });
+
+        container.addEventListener("pointercancel", clearDragState);
+
         redraw();
 
         addBadge("Using offline fallback graph editor (Rete CDN unavailable)");
