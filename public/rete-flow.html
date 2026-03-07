@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Physio Data Lab Flow Editor</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font-family: Inter, system-ui, -apple-system, sans-serif; background: #f8fafc; }
+      #editor { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+      #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+      .node { position: absolute; width: 220px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08); }
+      .node-header { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; font-weight: 600; background: #f8fafc; cursor: move; user-select: none; }
+      .node-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+      .port-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #334155; }
+      .port { width: 12px; height: 12px; border-radius: 999px; border: 2px solid #334155; background: #fff; cursor: crosshair; }
+      .port.output { border-color: #0f766e; }
+      .port.input { border-color: #4338ca; }
+      .port.pending { box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.25); }
+      .badge { position: fixed; right: 12px; bottom: 8px; margin: 0; font-size: 11px; color: #334155; background: #e2e8f0; border-radius: 999px; padding: 3px 8px; }
+      .stream-panel {
+        position: fixed;
+        top: 8px;
+        right: 12px;
+        min-width: 210px;
+        z-index: 5;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(3px);
+        padding: 10px;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+      }
+      .stream-panel h3 { margin: 0 0 8px; font-size: 12px; color: #0f172a; }
+      .stream-row { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 12px; color: #334155; }
+      .stream-value { font-variant-numeric: tabular-nums; font-weight: 600; color: #0f766e; }
+      .stream-status { margin-top: 8px; font-size: 11px; color: #64748b; }
+      .live-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 6px; background: #cbd5e1; }
+      .live-indicator.active { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2); }
+    </style>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script type="module">
+      const container = document.getElementById("editor");
+      const CHANNEL_LABELS = ["Tp9", "AF7", "AF8", "TP10"];
+
+      const createStreamPanel = () => {
+        const panel = document.createElement("div");
+        panel.className = "stream-panel";
+
+        const rowsHtml = CHANNEL_LABELS.map(
+          (label) =>
+            `<div class="stream-row"><span>${label}</span><span class="stream-value" data-channel="${label}">--</span></div>`
+        ).join("");
+
+        panel.innerHTML = `
+          <h3>Live EEG Stream</h3>
+          ${rowsHtml}
+          <div class="stream-status"><span class="live-indicator" data-live-indicator></span><span data-live-text>Waiting for stream…</span></div>
+        `;
+
+        document.body.appendChild(panel);
+
+        const valueElements = new Map(
+          CHANNEL_LABELS.map((label) => [label, panel.querySelector(`[data-channel="${label}"]`)])
+        );
+        const liveIndicator = panel.querySelector("[data-live-indicator]");
+        const liveText = panel.querySelector("[data-live-text]");
+
+        let lastSampleAt = 0;
+        setInterval(() => {
+          const isLive = Date.now() - lastSampleAt < 3000;
+          liveIndicator?.classList.toggle("active", isLive);
+          if (liveText) {
+            liveText.textContent = isLive ? "Streaming" : "Waiting for stream…";
+          }
+        }, 500);
+
+        return (channelLabel, value, timestampMs) => {
+          lastSampleAt = timestampMs;
+          const target = valueElements.get(channelLabel);
+          if (!target) return;
+          target.textContent = value.toFixed(5);
+        };
+      };
+
+      const bindStreamMessages = (onSample) => {
+        window.addEventListener("message", (event) => {
+          if (event.origin !== window.location.origin) return;
+          const data = event.data;
+          if (!data || data.type !== "eeg-sample") return;
+          if (typeof data.channelLabel !== "string" || typeof data.value !== "number") return;
+
+          onSample(data.channelLabel, data.value, typeof data.timestampMs === "number" ? data.timestampMs : Date.now());
+        });
+      };
+
+      const CDN_PRESETS = [
+        {
+          label: "esm.sh",
+          rete: "https://esm.sh/rete@2.0.5",
+          area: "https://esm.sh/rete-area-plugin@2.0.2",
+          connection: "https://esm.sh/rete-connection-plugin@2.0.2",
+          reactPlugin: "https://esm.sh/rete-react-plugin@2.0.2",
+          reactDomClient: "https://esm.sh/react-dom@19.2.0/client",
+        },
+        {
+          label: "jsdelivr",
+          rete: "https://cdn.jsdelivr.net/npm/rete@2.0.5/+esm",
+          area: "https://cdn.jsdelivr.net/npm/rete-area-plugin@2.0.2/+esm",
+          connection: "https://cdn.jsdelivr.net/npm/rete-connection-plugin@2.0.2/+esm",
+          reactPlugin: "https://cdn.jsdelivr.net/npm/rete-react-plugin@2.0.2/+esm",
+          reactDomClient: "https://cdn.jsdelivr.net/npm/react-dom@19.2.0/client/+esm",
+        },
+      ];
+
+      const loadReteModules = async () => {
+        for (const cdn of CDN_PRESETS) {
+          try {
+            const [rete, area, connection, reactPlugin, reactDomClient] = await Promise.all([
+              import(cdn.rete),
+              import(cdn.area),
+              import(cdn.connection),
+              import(cdn.reactPlugin),
+              import(cdn.reactDomClient),
+            ]);
+            return {
+              cdn: cdn.label,
+              rete,
+              areaModule: area,
+              connectionModule: connection,
+              reactPluginModule: reactPlugin,
+              reactDomClientModule: reactDomClient,
+            };
+          } catch (error) {
+            console.warn(`Failed to load Rete modules from ${cdn.label}`, error);
+          }
+        }
+        throw new Error("Failed to load Rete.js modules from configured CDNs.");
+      };
+
+      const addBadge = (text) => {
+        const badge = document.createElement("p");
+        badge.className = "badge";
+        badge.textContent = text;
+        document.body.appendChild(badge);
+      };
+
+      const initializeReteEditor = async () => {
+        const { cdn, rete, areaModule, connectionModule, reactPluginModule, reactDomClientModule } =
+          await loadReteModules();
+        const { NodeEditor, ClassicPreset } = rete;
+        const { AreaPlugin, AreaExtensions } = areaModule;
+        const { ConnectionPlugin, Presets: ConnectionPresets } = connectionModule;
+        const { ReactPlugin, Presets: ReactPresets } = reactPluginModule;
+        const { createRoot } = reactDomClientModule;
+
+        const socket = new ClassicPreset.Socket("eeg-signal");
+
+        const createChannelNode = (label) => {
+          const channelNode = new ClassicPreset.Node(`Channel: ${label}`);
+          channelNode.addOutput("signal", new ClassicPreset.Output(socket, "Signal"));
+          return channelNode;
+        };
+
+        const createFilterNode = (label) => {
+          const filterNode = new ClassicPreset.Node(`Filter: ${label}`);
+          filterNode.addInput("signal", new ClassicPreset.Input(socket, "Signal"));
+          filterNode.addOutput("filtered", new ClassicPreset.Output(socket, "Filtered"));
+          return filterNode;
+        };
+
+        const editor = new NodeEditor();
+        const area = new AreaPlugin(container);
+        const connection = new ConnectionPlugin();
+        const reactRender = new ReactPlugin({ createRoot });
+
+        editor.use(area);
+        area.use(connection);
+        area.use(reactRender);
+
+        connection.addPreset(ConnectionPresets.classic.setup());
+        reactRender.addPreset(ReactPresets.classic.setup());
+
+        AreaExtensions.simpleNodesOrder(area);
+        AreaExtensions.selectableNodes(area, AreaExtensions.selector(), {
+          accumulating: AreaExtensions.accumulateOnCtrl(),
+        });
+
+        const tp9 = createChannelNode("Tp9");
+        const af7 = createChannelNode("AF7");
+        const af8 = createChannelNode("AF8");
+        const notch = createFilterNode("60Hz Notch");
+        const bandpass = createFilterNode("1-40Hz Bandpass");
+
+        await editor.addNode(tp9);
+        await editor.addNode(af7);
+        await editor.addNode(af8);
+        await editor.addNode(notch);
+        await editor.addNode(bandpass);
+
+        await area.translate(tp9.id, { x: 40, y: 60 });
+        await area.translate(af7.id, { x: 40, y: 220 });
+        await area.translate(af8.id, { x: 40, y: 380 });
+        await area.translate(notch.id, { x: 420, y: 150 });
+        await area.translate(bandpass.id, { x: 420, y: 320 });
+
+        await editor.addConnection(new ClassicPreset.Connection(tp9, "signal", notch, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(af7, "signal", notch, "signal"));
+        await editor.addConnection(new ClassicPreset.Connection(af8, "signal", bandpass, "signal"));
+
+        AreaExtensions.zoomAt(area, editor.getNodes());
+        addBadge(`Loaded Rete modules from ${cdn}`);
+      };
+
+      const initializeFallbackEditor = () => {
+        container.innerHTML = '<svg id="links" width="100%" height="100%" preserveAspectRatio="none"></svg>';
+        const links = container.querySelector("#links");
+        const nodes = [
+          { id: "tp9", title: "Channel: Tp9", x: 40, y: 60, input: false, output: true },
+          { id: "af7", title: "Channel: AF7", x: 40, y: 220, input: false, output: true },
+          { id: "af8", title: "Channel: AF8", x: 40, y: 380, input: false, output: true },
+          { id: "notch", title: "Filter: 60Hz Notch", x: 420, y: 150, input: true, output: true },
+          { id: "bandpass", title: "Filter: 1-40Hz Bandpass", x: 420, y: 320, input: true, output: true },
+        ];
+
+        let pendingOutput = null;
+        const connections = [];
+
+        const getPortCenter = (el) => {
+          const r = el.getBoundingClientRect();
+          const c = container.getBoundingClientRect();
+          return { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
+        };
+
+        const redraw = () => {
+          links.innerHTML = "";
+          for (const conn of connections) {
+            const fromPort = container.querySelector(`[data-port-id='${conn.from}']`);
+            const toPort = container.querySelector(`[data-port-id='${conn.to}']`);
+            if (!fromPort || !toPort) continue;
+
+            const from = getPortCenter(fromPort);
+            const to = getPortCenter(toPort);
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            const cx = Math.max(80, (to.x - from.x) * 0.5);
+            path.setAttribute(
+              "d",
+              `M ${from.x} ${from.y} C ${from.x + cx} ${from.y}, ${to.x - cx} ${to.y}, ${to.x} ${to.y}`
+            );
+            path.setAttribute("stroke", "#0f766e");
+            path.setAttribute("stroke-width", "3");
+            path.setAttribute("vector-effect", "non-scaling-stroke");
+            path.setAttribute("fill", "none");
+            links.appendChild(path);
+          }
+        };
+
+        const makeNode = (node) => {
+          const el = document.createElement("div");
+          el.className = "node";
+          el.style.left = `${node.x}px`;
+          el.style.top = `${node.y}px`;
+          el.innerHTML = `<div class='node-header'>${node.title}</div><div class='node-body'></div>`;
+          const body = el.querySelector(".node-body");
+
+          if (node.input) {
+            const row = document.createElement("div");
+            row.className = "port-row";
+            row.innerHTML = `<div class='port input' data-port-id='${node.id}:in'></div><span>Signal In</span>`;
+            body.appendChild(row);
+          }
+
+          if (node.output) {
+            const row = document.createElement("div");
+            row.className = "port-row";
+            row.innerHTML = `<span>Signal Out</span><div class='port output' data-port-id='${node.id}:out'></div>`;
+            body.appendChild(row);
+          }
+
+          const header = el.querySelector(".node-header");
+          header.addEventListener("pointerdown", (event) => {
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const left = parseFloat(el.style.left);
+            const top = parseFloat(el.style.top);
+            const move = (e) => {
+              el.style.left = `${left + e.clientX - startX}px`;
+              el.style.top = `${top + e.clientY - startY}px`;
+              redraw();
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          });
+
+          container.appendChild(el);
+        };
+
+        for (const node of nodes) makeNode(node);
+
+        container.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement) || !target.classList.contains("port")) return;
+          const id = target.dataset.portId;
+          if (!id) return;
+
+          if (target.classList.contains("output")) {
+            container.querySelectorAll(".port.pending").forEach((el) => el.classList.remove("pending"));
+            target.classList.add("pending");
+            pendingOutput = id;
+            return;
+          }
+
+          if (target.classList.contains("input") && pendingOutput) {
+            connections.push({ from: pendingOutput, to: id });
+            pendingOutput = null;
+            container.querySelectorAll(".port.pending").forEach((el) => el.classList.remove("pending"));
+            redraw();
+          }
+        });
+
+        connections.push({ from: "tp9:out", to: "notch:in" });
+        connections.push({ from: "af7:out", to: "notch:in" });
+        connections.push({ from: "af8:out", to: "bandpass:in" });
+        redraw();
+
+        addBadge("Using offline fallback graph editor (Rete CDN unavailable)");
+      };
+
+      const updateStreamPanel = createStreamPanel();
+      bindStreamMessages((channelLabel, value, timestampMs) => {
+        updateStreamPanel(channelLabel, value, timestampMs);
+      });
+
+      initializeReteEditor().catch((error) => {
+        console.error("Failed to initialize Rete flow editor", error);
+        initializeFallbackEditor();
+      });
+    </script>
+  </body>
+</html>

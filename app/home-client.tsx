@@ -25,6 +25,13 @@ type CsvRow = {
   channelValues: Array<number | null>;
 };
 
+type EegFlowMessage = {
+  type: "eeg-sample";
+  channelLabel: string;
+  value: number;
+  timestampMs: number;
+};
+
 export default function HomeClient() {
   const [error, setError] = useState<string | null>(null);
   const [museStatus, setMuseStatus] = useState<string>("Disconnected");
@@ -35,6 +42,7 @@ export default function HomeClient() {
   const [recordedSampleCount, setRecordedSampleCount] = useState(0);
   const recordedRowsRef = useRef<Map<string, CsvRow>>(new Map());
   const isRecordingRef = useRef(false);
+  const flowEditorFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const buildCsvFileName = () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -122,6 +130,18 @@ export default function HomeClient() {
             return next;
           });
 
+          const latestValue = reading.samples.at(-1);
+          if (latestValue !== undefined) {
+            const message: EegFlowMessage = {
+              type: "eeg-sample",
+              channelLabel: CHANNEL_LABELS[channelIndex],
+              value: latestValue,
+              timestampMs: Date.now(),
+            };
+
+            flowEditorFrameRef.current?.contentWindow?.postMessage(message, window.location.origin);
+          }
+
           if (isRecordingRef.current) {
             const nowEpochMs = Date.now();
             const samplePeriodMs = 1000 / DEFAULT_SAMPLING_FREQUENCY;
@@ -164,8 +184,7 @@ export default function HomeClient() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="flex flex-col items-center gap-6">
+    <div className="flex min-h-screen w-full flex-col items-center gap-6 py-8">
         <h1 className="text-5xl font-bold">Physio Data Lab</h1>
 
         <div className="flex flex-col items-center gap-3">
@@ -215,7 +234,22 @@ export default function HomeClient() {
           channelLabels={CHANNEL_LABELS}
           eegSeriesByChannel={eegSeriesByChannel}
         />
-      </div>
+
+
+        <section className="w-screen">
+          <div className="border-y border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="mb-2 text-xl font-semibold">Flow Editor (Rete.js)</h2>
+            <p className="mb-3 text-sm text-slate-600">
+              Drag from EEG channel outputs to filter inputs to design a flow-based processing graph.
+            </p>
+            <iframe
+              ref={flowEditorFrameRef}
+              title="Rete.js flow editor"
+              src="/rete-flow.html"
+              className="h-[520px] w-full rounded border border-slate-300"
+            />
+          </div>
+        </section>
     </div>
   );
 }
