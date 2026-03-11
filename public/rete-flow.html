@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Physio Data Lab Flow Editor</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font-family: "Comic Sans MS", "Trebuchet MS", "Inter", system-ui, sans-serif; background: radial-gradient(circle at 20% 10%, #fef3c7 0%, #e0f2fe 35%, #ede9fe 70%, #fce7f3 100%); }
+      #editor { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+      #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: auto; overflow: visible; }
+      .edge-path { pointer-events: stroke; cursor: pointer; }
+      .edge-delete-btn { cursor: pointer; }
+      .edge-delete-btn circle { fill: #ef4444; stroke: #ffffff; stroke-width: 2; }
+      .edge-delete-btn text { fill: #ffffff; font-size: 18px; font-weight: 700; text-anchor: middle; dominant-baseline: central; user-select: none; }
+      .node { position: absolute; width: 220px; border: 2px solid #a78bfa; border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, #ffffff 0%, #f8f7ff 100%); background-clip: padding-box; box-shadow: 0 10px 24px rgba(124, 58, 237, 0.18); }
+      .node-header { padding: 10px 12px; border-bottom: 1px dashed #c4b5fd; font-size: 14px; font-weight: 700; background: linear-gradient(90deg, #fde68a 0%, #bfdbfe 55%, #ddd6fe 100%); cursor: move; user-select: none; }
+      .node-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+      .port-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #334155; }
+      .port-row.filter-io { gap: 8px; }
+      .port-row.filter-io .port-label { flex: 1; text-align: center; }
+      .port { width: 14px; height: 14px; border-radius: 999px; border: 2px solid #334155; background: #fff; cursor: crosshair; transition: transform 0.15s ease; }
+      .port:hover { transform: scale(1.15); }
+      .port.output { border-color: #059669; background: #d1fae5; }
+      .port.input { border-color: #7c3aed; background: #ede9fe; }
+      .port.pending { box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.25); }
+      .badge { position: fixed; right: 12px; bottom: 8px; margin: 0; font-size: 11px; color: #4c1d95; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 999px; padding: 3px 8px; }
+      .stream-panel {
+        position: fixed;
+        top: 8px;
+        right: 12px;
+        min-width: 210px;
+        z-index: 5;
+        border: 2px solid #93c5fd;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(3px);
+        padding: 10px;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+      }
+      .stream-panel h3 { margin: 0 0 8px; font-size: 12px; color: #0f172a; }
+      .stream-row { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 12px; color: #334155; }
+      .stream-value { font-variant-numeric: tabular-nums; font-weight: 600; color: #0f766e; }
+      .stream-status { margin-top: 8px; font-size: 11px; color: #64748b; }
+      .live-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 6px; background: #cbd5e1; }
+      .live-indicator.active { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2); }
+    </style>
+  </head>
+  <body>
+    <div id="editor"></div>
+    <script type="module">
+      const container = document.getElementById("editor");
+      const CHANNEL_LABELS = ["Tp9", "AF7", "AF8", "TP10"];
+
+      const createStreamPanel = () => {
+        const panel = document.createElement("div");
+        panel.className = "stream-panel";
+
+        const rowsHtml = CHANNEL_LABELS.map(
+          (label) =>
+            `<div class="stream-row"><span>${label}</span><span class="stream-value" data-channel="${label}">--</span></div>`
+        ).join("");
+
+        panel.innerHTML = `
+          <h3>🧠 Live EEG Stream</h3>
+          ${rowsHtml}
+          <div class="stream-status"><span class="live-indicator" data-live-indicator></span><span data-live-text>Waiting for stream…</span></div>
+        `;
+
+        document.body.appendChild(panel);
+
+        const valueElements = new Map(
+          CHANNEL_LABELS.map((label) => [label, panel.querySelector(`[data-channel="${label}"]`)])
+        );
+        const liveIndicator = panel.querySelector("[data-live-indicator]");
+        const liveText = panel.querySelector("[data-live-text]");
+
+        let lastSampleAt = 0;
+        setInterval(() => {
+          const isLive = Date.now() - lastSampleAt < 3000;
+          liveIndicator?.classList.toggle("active", isLive);
+          if (liveText) {
+            liveText.textContent = isLive ? "Streaming 🚀" : "Waiting for stream…";
+          }
+        }, 500);
+
+        return (channelLabel, value, timestampMs) => {
+          lastSampleAt = timestampMs;
+          const target = valueElements.get(channelLabel);
+          if (!target) return;
+          target.textContent = value.toFixed(5);
+        };
+      };
+
+      const bindStreamMessages = (onSample) => {
+        window.addEventListener("message", (event) => {
+          if (event.origin !== window.location.origin) return;
+          const data = event.data;
+          if (!data || data.type !== "eeg-sample") return;
+          if (typeof data.channelLabel !== "string" || typeof data.value !== "number") return;
+
+          onSample(data.channelLabel, data.value, typeof data.timestampMs === "number" ? data.timestampMs : Date.now());
+        });
+      };
+
+      const CDN_PRESETS = [
+        {
+          label: "esm.sh",
+          rete: "https://esm.sh/rete@2.0.5",
+          area: "https://esm.sh/rete-area-plugin@2.0.2",
+          connection: "https://esm.sh/rete-connection-plugin@2.0.2",
+          reactPlugin: "https://esm.sh/rete-react-plugin@2.0.2",
+          reactDomClient: "https://esm.sh/react-dom@19.2.0/client",
+        },
+        {
+          label: "jsdelivr",
+          rete: "https://cdn.jsdelivr.net/npm/rete@2.0.5/+esm",
+          area: "https://cdn.jsdelivr.net/npm/rete-area-plugin@2.0.2/+esm",
+          connection: "https://cdn.jsdelivr.net/npm/rete-connection-plugin@2.0.2/+esm",
+          reactPlugin: "https://cdn.jsdelivr.net/npm/rete-react-plugin@2.0.2/+esm",
+          reactDomClient: "https://cdn.jsdelivr.net/npm/react-dom@19.2.0/client/+esm",
+        },
+      ];
+
+      const loadReteModules = async () => {
+        for (const cdn of CDN_PRESETS) {
+          try {
+            const [rete, area, connection, reactPlugin, reactDomClient] = await Promise.all([
+              import(cdn.rete),
+              import(cdn.area),
+              import(cdn.connection),
+              import(cdn.reactPlugin),
+              import(cdn.reactDomClient),
+            ]);
+            return {
+              cdn: cdn.label,
+              rete,
+              areaModule: area,
+              connectionModule: connection,
+              reactPluginModule: reactPlugin,
+              reactDomClientModule: reactDomClient,
+            };
+          } catch (error) {
+            console.warn(`Failed to load Rete modules from ${cdn.label}`, error);
+          }
+        }
+        throw new Error("Failed to load Rete.js modules from configured CDNs.");
+      };
+
+      const addBadge = (text) => {
+        const badge = document.createElement("p");
+        badge.className = "badge";
+        badge.textContent = text;
+        document.body.appendChild(badge);
+      };
+
+      const initializeReteEditor = async () => {
+        const { cdn, rete, areaModule, connectionModule, reactPluginModule, reactDomClientModule } =
+          await loadReteModules();
+        const { NodeEditor, ClassicPreset } = rete;
+        const { AreaPlugin, AreaExtensions } = areaModule;
+        const { ConnectionPlugin, Presets: ConnectionPresets } = connectionModule;
+        const { ReactPlugin, Presets: ReactPresets } = reactPluginModule;
+        const { createRoot } = reactDomClientModule;
+
+        const socket = new ClassicPreset.Socket("eeg-signal");
+
+        const createChannelNode = (label) => {
+          const channelNode = new ClassicPreset.Node(`🎧 Channel: ${label}`);
+          channelNode.addOutput("signal", new ClassicPreset.Output(socket, "Signal"));
+          return channelNode;
+        };
+
+        const createFilterNode = (label) => {
+          const filterNode = new ClassicPreset.Node(`✨ Filter: ${label}`);
+          filterNode.addInput("signal", new ClassicPreset.Input(socket, "Signal"));
+          filterNode.addOutput("filtered", new ClassicPreset.Output(socket, "Filtered"));
+          return filterNode;
+        };
+
+        const editor = new NodeEditor();
+        const area = new AreaPlugin(container);
+        const connection = new ConnectionPlugin();
+        const reactRender = new ReactPlugin({ createRoot });
+
+        editor.use(area);
+        area.use(connection);
+        area.use(reactRender);
+
+        connection.addPreset(ConnectionPresets.classic.setup());
+        reactRender.addPreset(ReactPresets.classic.setup());
+
+        AreaExtensions.simpleNodesOrder(area);
+        AreaExtensions.selectableNodes(area, AreaExtensions.selector(), {
+          accumulating: AreaExtensions.accumulateOnCtrl(),
+        });
+
+        const tp9 = createChannelNode("Tp9");
+        const af7 = createChannelNode("AF7");
+        const af8 = createChannelNode("AF8");
+        const notch = createFilterNode("60Hz Notch");
+        const bandpass = createFilterNode("1-40Hz Bandpass");
+
+        await editor.addNode(tp9);
+        await editor.addNode(af7);
+        await editor.addNode(af8);
+        await editor.addNode(notch);
+        await editor.addNode(bandpass);
+
+        await area.translate(tp9.id, { x: 40, y: 60 });
+        await area.translate(af7.id, { x: 40, y: 220 });
+        await area.translate(af8.id, { x: 40, y: 380 });
+        await area.translate(notch.id, { x: 420, y: 150 });
+        await area.translate(bandpass.id, { x: 420, y: 320 });
+
+        AreaExtensions.zoomAt(area, editor.getNodes());
+        addBadge(`Loaded Rete modules from ${cdn}`);
+      };
+
+      const initializeFallbackEditor = () => {
+        container.innerHTML = '<svg id="links" width="100%" height="100%" preserveAspectRatio="none"></svg>';
+        const links = container.querySelector("#links");
+        const nodes = [
+          { id: "tp9", title: "🎧 Channel: Tp9", x: 40, y: 60, input: false, output: true },
+          { id: "af7", title: "🎧 Channel: AF7", x: 40, y: 220, input: false, output: true },
+          { id: "af8", title: "🎧 Channel: AF8", x: 40, y: 380, input: false, output: true },
+          { id: "notch", title: "✨ Filter: 60Hz Notch", x: 420, y: 150, input: true, output: true },
+          { id: "bandpass", title: "✨ Filter: 1-40Hz Bandpass", x: 420, y: 320, input: true, output: true },
+        ];
+
+        const connections = [];
+        let dragState = null;
+
+        const getPortCenter = (el) => {
+          const r = el.getBoundingClientRect();
+          const c = container.getBoundingClientRect();
+          return { x: r.left + r.width / 2 - c.left, y: r.top + r.height / 2 - c.top };
+        };
+
+        const buildCurve = (from, to) => {
+          const cx = Math.max(80, (to.x - from.x) * 0.5);
+          return `M ${from.x} ${from.y} C ${from.x + cx} ${from.y}, ${to.x - cx} ${to.y}, ${to.x} ${to.y}`;
+        };
+
+        const getCurveMidpoint = (from, to) => {
+          const cx = Math.max(80, (to.x - from.x) * 0.5);
+          const p0 = from;
+          const p1 = { x: from.x + cx, y: from.y };
+          const p2 = { x: to.x - cx, y: to.y };
+          const p3 = to;
+          const t = 0.5;
+          const mt = 1 - t;
+
+          return {
+            x: mt ** 3 * p0.x + 3 * mt ** 2 * t * p1.x + 3 * mt * t ** 2 * p2.x + t ** 3 * p3.x,
+            y: mt ** 3 * p0.y + 3 * mt ** 2 * t * p1.y + 3 * mt * t ** 2 * p2.y + t ** 3 * p3.y,
+          };
+        };
+
+        const removeConnectionByIndex = (index) => {
+          connections.splice(index, 1);
+          redraw();
+        };
+
+        const upsertConnection = (from, to) => {
+          const duplicateIndex = connections.findIndex((conn) => conn.from === from && conn.to === to);
+          if (duplicateIndex !== -1) return;
+
+          const existingForInputIndex = connections.findIndex((conn) => conn.to === to);
+          if (existingForInputIndex !== -1) {
+            connections[existingForInputIndex] = { from, to };
+            return;
+          }
+
+          connections.push({ from, to });
+        };
+
+        const redraw = () => {
+          links.innerHTML = "";
+
+          for (const [index, conn] of connections.entries()) {
+            const fromPort = container.querySelector(`[data-port-id='${conn.from}']`);
+            const toPort = container.querySelector(`[data-port-id='${conn.to}']`);
+            if (!fromPort || !toPort) continue;
+
+            const from = getPortCenter(fromPort);
+            const to = getPortCenter(toPort);
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", buildCurve(from, to));
+            path.setAttribute("stroke", "#0f766e");
+            path.setAttribute("stroke-width", "3");
+            path.setAttribute("vector-effect", "non-scaling-stroke");
+            path.setAttribute("fill", "none");
+            path.classList.add("edge-path");
+            path.dataset.edgeIndex = String(index);
+            path.addEventListener("click", (event) => {
+              event.stopPropagation();
+              removeConnectionByIndex(index);
+            });
+            links.appendChild(path);
+
+            const midpoint = getCurveMidpoint(from, to);
+            const button = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            button.classList.add("edge-delete-btn");
+            button.setAttribute("transform", `translate(${midpoint.x}, ${midpoint.y})`);
+
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("r", "11");
+
+            const icon = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            icon.textContent = "×";
+
+            button.appendChild(circle);
+            button.appendChild(icon);
+            button.addEventListener("click", (event) => {
+              event.stopPropagation();
+              removeConnectionByIndex(index);
+            });
+            links.appendChild(button);
+          }
+
+          if (dragState) {
+            const from = getPortCenter(dragState.fromPort);
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", buildCurve(from, dragState.pointer));
+            path.setAttribute("stroke", "#0ea5e9");
+            path.setAttribute("stroke-width", "2");
+            path.setAttribute("stroke-dasharray", "6 4");
+            path.setAttribute("vector-effect", "non-scaling-stroke");
+            path.setAttribute("fill", "none");
+            path.style.pointerEvents = "none";
+            links.appendChild(path);
+          }
+        };
+
+        const makeNode = (node) => {
+          const el = document.createElement("div");
+          el.className = "node";
+          el.style.left = `${node.x}px`;
+          el.style.top = `${node.y}px`;
+          el.innerHTML = `<div class='node-header'>${node.title}</div><div class='node-body'></div>`;
+          const body = el.querySelector(".node-body");
+
+          if (node.input && node.output) {
+            const row = document.createElement("div");
+            row.className = "port-row filter-io";
+            row.innerHTML = `<div class='port input' data-port-id='${node.id}:in'></div><span class='port-label'>Signal</span><div class='port output' data-port-id='${node.id}:out'></div>`;
+            body.appendChild(row);
+          } else if (node.input) {
+            const row = document.createElement("div");
+            row.className = "port-row";
+            row.innerHTML = `<div class='port input' data-port-id='${node.id}:in'></div><span>Signal In</span>`;
+            body.appendChild(row);
+          } else if (node.output) {
+            const row = document.createElement("div");
+            row.className = "port-row";
+            row.innerHTML = `<span>Signal Out</span><div class='port output' data-port-id='${node.id}:out'></div>`;
+            body.appendChild(row);
+          }
+
+          const header = el.querySelector(".node-header");
+          header.addEventListener("pointerdown", (event) => {
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const left = parseFloat(el.style.left);
+            const top = parseFloat(el.style.top);
+            const move = (e) => {
+              el.style.left = `${left + e.clientX - startX}px`;
+              el.style.top = `${top + e.clientY - startY}px`;
+              redraw();
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          });
+
+          container.appendChild(el);
+        };
+
+        for (const node of nodes) makeNode(node);
+
+        container.addEventListener("pointerdown", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement) || !target.classList.contains("output")) return;
+
+          const id = target.dataset.portId;
+          if (!id) return;
+
+          dragState = {
+            from: id,
+            fromPort: target,
+            pointer: { x: event.clientX - container.getBoundingClientRect().left, y: event.clientY - container.getBoundingClientRect().top },
+          };
+
+          target.classList.add("pending");
+          redraw();
+        });
+
+        container.addEventListener("pointermove", (event) => {
+          if (!dragState) return;
+          const c = container.getBoundingClientRect();
+          dragState.pointer = { x: event.clientX - c.left, y: event.clientY - c.top };
+          redraw();
+        });
+
+        const clearDragState = () => {
+          if (!dragState) return;
+          dragState.fromPort.classList.remove("pending");
+          dragState = null;
+          redraw();
+        };
+
+        container.addEventListener("pointerup", (event) => {
+          if (!dragState) return;
+
+          const target = document.elementFromPoint(event.clientX, event.clientY);
+          if (target instanceof HTMLElement && target.classList.contains("input")) {
+            const to = target.dataset.portId;
+            if (to) {
+              upsertConnection(dragState.from, to);
+            }
+          }
+
+          clearDragState();
+        });
+
+        container.addEventListener("pointercancel", clearDragState);
+
+        redraw();
+
+        addBadge("Using offline fallback graph editor (Rete CDN unavailable)");
+      };
+
+      const updateStreamPanel = createStreamPanel();
+      bindStreamMessages((channelLabel, value, timestampMs) => {
+        updateStreamPanel(channelLabel, value, timestampMs);
+      });
+
+      initializeReteEditor().catch((error) => {
+        console.error("Failed to initialize Rete flow editor", error);
+        initializeFallbackEditor();
+      });
+    </script>
+  </body>
+</html>
